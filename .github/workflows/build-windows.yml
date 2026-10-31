@@ -1,0 +1,95 @@
+name: Build MAHYAR VPN for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'main.js'
+      - 'preload.js'
+      - 'src/**'
+      - 'public/**'
+      - 'engines/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-windows.yml'
+
+env:
+  ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+  ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+
+jobs:
+  test:
+    name: Tests and syntax checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+      - name: Check JavaScript syntax
+        shell: pwsh
+        run: |
+          $files = @('main.js', 'preload.js') + (Get-ChildItem src,public -Recurse -Filter *.js | ForEach-Object { $_.FullName })
+          foreach ($file in $files) { node --check $file }
+
+  package:
+    name: Windows installer and portable build
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Download official Xray Windows assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ 'User-Agent' = 'MAHYAR-VPN-GitHub-Action' }
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/XTLS/Xray-core/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -match '^Xray-windows-64.*\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw 'Could not find the official Xray-windows-64.zip release asset.' }
+          Write-Host "Downloading $($asset.name) from Xray $($release.tag_name)"
+          New-Item -ItemType Directory -Force -Path engines/xray, .xray-download | Out-Null
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile .xray-download/xray.zip
+          if ($asset.digest) {
+            $expected = ($asset.digest -replace '^sha256:', '').ToLowerInvariant()
+            $actual = (Get-FileHash .xray-download/xray.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($expected -ne $actual) { throw "Xray SHA-256 mismatch. Expected $expected, got $actual" }
+            Write-Host 'Xray archive SHA-256 verified.'
+          }
+          Expand-Archive -Path .xray-download/xray.zip -DestinationPath .xray-download/extracted -Force
+          $root = Get-ChildItem .xray-download/extracted -Recurse -File
+          foreach ($name in @('xray.exe','geoip.dat','geosite.dat')) {
+            $file = $root | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
+            if (-not $file) { throw "Xray archive did not contain $name" }
+            Copy-Item $file.FullName (Join-Path 'engines/xray' $name) -Force
+          }
+          & engines/xray/xray.exe version
+      - name: Build NSIS installer and portable executable
+        run: npm run build -- --win --x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahyar-vpn-windows-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            dist/*-Setup-*.exe
+            dist/*-Portable-*.exe
+            dist/latest*.yml
+          retention-days: 14
