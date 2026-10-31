@@ -80,7 +80,7 @@ jobs:
           }
           & engines/xray/xray.exe version
       - name: Build NSIS installer and portable executable
-        run: npm run build -- --win --x64
+        run: npm run build:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Upload Windows artifacts
