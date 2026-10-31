@@ -1,0 +1,3 @@
+const test=require('node:test');const assert=require('node:assert');const {EngineManager}=require('../src/engine-manager');const fs=require('fs'),os=require('os'),path=require('path');
+test('engine inventory is explicit and honest',()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'mahyar-'));const m=new EngineManager({root:d,dataDir:d,onEvent:()=>{}});const i=m.inventory();assert.deepEqual(i.map(x=>x.id),['lantern','geph','mitm']);assert.equal(i.every(x=>x.available===false),true)});
+test('missing engine does not simulate connection',async()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'mahyar-'));const m=new EngineManager({root:d,dataDir:d,onEvent:()=>{}});await assert.rejects(()=>m.start('lantern'),/binary is missing/);assert.equal(m.snapshot().connected,false)});
